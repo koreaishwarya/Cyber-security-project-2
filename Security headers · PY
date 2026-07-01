@@ -1,0 +1,181 @@
+"""
+security_headers.py — Checks HTTP response headers against security best practices.
+Covers OWASP Secure Headers Project recommendations.
+"""
+
+import requests
+
+
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": {
+        "severity":    "HIGH",
+        "name":        "Missing HTTP Strict Transport Security (HSTS)",
+        "description": (
+            "HSTS is not configured. The site is vulnerable to SSL-stripping "
+            "and protocol downgrade attacks."
+        ),
+        "cvss":        7.4,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N",
+        "remediation": "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload",
+        "references":  ["https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security"],
+    },
+    "Content-Security-Policy": {
+        "severity":    "MEDIUM",
+        "name":        "Missing Content Security Policy (CSP)",
+        "description": (
+            "No CSP header is set. Inline scripts and external resources are unrestricted, "
+            "making XSS attacks significantly easier to exploit."
+        ),
+        "cvss":        5.4,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+        "remediation": "Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'",
+        "references":  ["https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"],
+    },
+    "X-Frame-Options": {
+        "severity":    "MEDIUM",
+        "name":        "Missing X-Frame-Options (Clickjacking Protection)",
+        "description": (
+            "The page can be embedded in iframes on external sites, "
+            "enabling clickjacking attacks that trick users into performing unintended actions."
+        ),
+        "cvss":        5.4,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N",
+        "remediation": "X-Frame-Options: DENY  (or use CSP: frame-ancestors 'none')",
+        "references":  ["https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options"],
+    },
+    "X-Content-Type-Options": {
+        "severity":    "LOW",
+        "name":        "Missing X-Content-Type-Options",
+        "description": (
+            "The browser may perform MIME-type sniffing, potentially treating "
+            "uploaded non-script files as executable JavaScript."
+        ),
+        "cvss":        3.7,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+        "remediation": "X-Content-Type-Options: nosniff",
+        "references":  ["https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options"],
+    },
+    "Referrer-Policy": {
+        "severity":    "LOW",
+        "name":        "Missing Referrer-Policy Header",
+        "description": "Full Referer URL (including paths and query strings) may be leaked to third-party sites.",
+        "cvss":        3.1,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N",
+        "remediation": "Referrer-Policy: strict-origin-when-cross-origin",
+        "references":  ["https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy"],
+    },
+    "Permissions-Policy": {
+        "severity":    "LOW",
+        "name":        "Missing Permissions-Policy Header",
+        "description": "Browser features (camera, microphone, geolocation) are not explicitly restricted.",
+        "cvss":        3.1,
+        "cvss_vector": "",
+        "remediation": "Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=()",
+        "references":  ["https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy"],
+    },
+    "X-XSS-Protection": {
+        "severity":    "INFO",
+        "name":        "Missing X-XSS-Protection Header",
+        "description": (
+            "The legacy browser XSS auditor header is absent. "
+            "Modern browsers have deprecated this in favour of CSP."
+        ),
+        "cvss":        2.0,
+        "cvss_vector": "",
+        "remediation": (
+            "X-XSS-Protection: 1; mode=block  "
+            "(legacy — prioritise implementing a strict CSP instead)"
+        ),
+        "references":  [],
+    },
+    "Cache-Control": {
+        "severity":    "INFO",
+        "name":        "Missing Cache-Control Header",
+        "description": "Sensitive pages may be cached by browsers or proxies without Cache-Control directives.",
+        "cvss":        2.0,
+        "cvss_vector": "",
+        "remediation": "Cache-Control: no-store, no-cache, must-revalidate  (for authenticated pages)",
+        "references":  [],
+    },
+}
+
+DISCLOSURE_HEADERS = {
+    "Server": {
+        "severity":    "INFO",
+        "name":        "Server Version Disclosure",
+        "description": "The Server header reveals web server software and version, aiding attacker fingerprinting.",
+        "cvss":        2.0,
+        "remediation": "Configure the web server to suppress or anonymise the Server header.",
+    },
+    "X-Powered-By": {
+        "severity":    "INFO",
+        "name":        "Technology Stack Disclosure (X-Powered-By)",
+        "description": "The X-Powered-By header reveals the backend language / framework version.",
+        "cvss":        2.0,
+        "remediation": "Remove X-Powered-By: e.g. in Express: app.disable('x-powered-by')",
+    },
+    "X-AspNet-Version": {
+        "severity":    "INFO",
+        "name":        "ASP.NET Version Disclosure",
+        "description": "The ASP.NET version is exposed, helping attackers target known CVEs.",
+        "cvss":        2.0,
+        "remediation": "Remove X-AspNet-Version via <httpRuntime enableVersionHeader='false'/>",
+    },
+}
+
+
+class SecurityHeaderScanner:
+    def __init__(self, timeout: int = 10, headers: dict = None):
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": "VulnScan/2.0", **(headers or {})})
+
+    def scan(self, url: str) -> list:
+        findings = []
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            resp_lower = {k.lower(): v for k, v in resp.headers.items()}
+
+            # Check for missing security headers
+            for header, meta in SECURITY_HEADERS.items():
+                if header.lower() not in resp_lower:
+                    findings.append({
+                        "type":        "Header",
+                        "severity":    meta["severity"],
+                        "name":        meta["name"],
+                        "url":         url,
+                        "param":       header,
+                        "payload":     "N/A",
+                        "method":      "GET",
+                        "evidence":    f"HTTP response does not include '{header}' header",
+                        "description": meta["description"],
+                        "cvss":        meta["cvss"],
+                        "cvss_vector": meta.get("cvss_vector", ""),
+                        "remediation": meta["remediation"],
+                        "references":  meta.get("references", []),
+                    })
+
+            # Check for information-disclosing headers
+            for header, meta in DISCLOSURE_HEADERS.items():
+                if header.lower() in resp_lower:
+                    value = resp_lower[header.lower()]
+                    findings.append({
+                        "type":        "Header",
+                        "severity":    meta["severity"],
+                        "name":        meta["name"],
+                        "url":         url,
+                        "param":       header,
+                        "payload":     "N/A",
+                        "method":      "GET",
+                        "evidence":    f"Response header '{header}: {value}' reveals server details",
+                        "description": meta["description"],
+                        "cvss":        meta["cvss"],
+                        "cvss_vector": "",
+                        "remediation": meta["remediation"],
+                        "references":  [],
+                    })
+
+        except Exception:
+            pass
+
+        return findings
