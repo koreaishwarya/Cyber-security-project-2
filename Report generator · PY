@@ -1,0 +1,192 @@
+"""
+report_generator.py — Generates downloadable HTML and JSON reports from scan data.
+"""
+
+import os
+import json
+from datetime import datetime
+
+
+SEV_ORDER  = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+SEV_COLORS = {
+    "CRITICAL": "#ff1744",
+    "HIGH":     "#ff6d00",
+    "MEDIUM":   "#ffb300",
+    "LOW":      "#00e676",
+    "INFO":     "#00b0ff",
+}
+SEV_BG = {
+    "CRITICAL": "rgba(255,23,68,0.12)",
+    "HIGH":     "rgba(255,109,0,0.12)",
+    "MEDIUM":   "rgba(255,179,0,0.12)",
+    "LOW":      "rgba(0,230,118,0.12)",
+    "INFO":     "rgba(0,176,255,0.12)",
+}
+
+
+class ReportGenerator:
+    def __init__(self, scan: dict):
+        self.scan     = scan
+        self.findings = sorted(
+            scan["findings"],
+            key=lambda f: SEV_ORDER.index(f.get("severity", "INFO")),
+        )
+        self.summary  = self._build_summary()
+        self.out_dir  = os.path.join(os.path.dirname(__file__), "reports")
+        os.makedirs(self.out_dir, exist_ok=True)
+
+    def _build_summary(self):
+        s = {k: 0 for k in SEV_ORDER}
+        for f in self.findings:
+            s[f.get("severity", "INFO")] += 1
+        return s
+
+    # ── JSON export ────────────────────────────────────────────
+
+    def generate_json(self) -> str:
+        data = {
+            "scan_id":      self.scan["id"],
+            "target":       self.scan["url"],
+            "started_at":   self.scan.get("started_at"),
+            "completed_at": self.scan.get("completed_at"),
+            "summary":      self.summary,
+            "findings":     self.findings,
+        }
+        path = os.path.join(self.out_dir, f"report_{self.scan['id'][:8]}.json")
+        with open(path, "w") as fh:
+            json.dump(data, fh, indent=2)
+        return path
+
+    # ── HTML export ────────────────────────────────────────────
+
+    def generate_html(self) -> str:
+        path = os.path.join(self.out_dir, f"report_{self.scan['id'][:8]}.html")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(self._render_html())
+        return path
+
+    # ── Renderer ───────────────────────────────────────────────
+
+    def _render_html(self) -> str:
+        scan_date = self.scan.get("started_at", "")[:19].replace("T", " ")
+        duration  = ""
+        if self.scan.get("started_at") and self.scan.get("completed_at"):
+            try:
+                s = datetime.fromisoformat(self.scan["started_at"])
+                e = datetime.fromisoformat(self.scan["completed_at"])
+                duration = f"{int((e - s).total_seconds())}s"
+            except Exception:
+                pass
+
+        summary_cards = "".join(
+            f"""
+            <div class="stat" style="border-top:3px solid {SEV_COLORS[sev]}">
+                <div class="stat-num" style="color:{SEV_COLORS[sev]}">{self.summary[sev]}</div>
+                <div class="stat-label">{sev}</div>
+            </div>"""
+            for sev in SEV_ORDER
+        )
+
+        finding_rows = ""
+        for i, f in enumerate(self.findings, 1):
+            sev   = f.get("severity", "INFO")
+            color = SEV_COLORS[sev]
+            bg    = SEV_BG[sev]
+            refs  = "".join(
+                f'<a href="{r}" target="_blank" rel="noopener">{r}</a><br>'
+                for r in f.get("references", [])
+            )
+            finding_rows += f"""
+            <div class="finding" style="border-left:4px solid {color}; background:{bg}">
+                <div class="finding-header">
+                    <span class="badge" style="background:{color}">{sev}</span>
+                    <strong>{i}. {_esc(f.get('name', ''))}</strong>
+                    <span class="cvss-score" style="color:{color}">CVSS {f.get('cvss', 'N/A')}</span>
+                </div>
+                <table class="detail-table">
+                    <tr><th>Type</th><td>{_esc(f.get('type',''))}</td>
+                        <th>Method</th><td>{_esc(f.get('method',''))}</td></tr>
+                    <tr><th>URL</th><td colspan="3"><code>{_esc(f.get('url',''))}</code></td></tr>
+                    <tr><th>Parameter</th><td>{_esc(f.get('param',''))}</td>
+                        <th>CVSS Vector</th><td><code style="font-size:11px">{_esc(f.get('cvss_vector','N/A'))}</code></td></tr>
+                    <tr><th>Payload</th><td colspan="3"><code>{_esc(f.get('payload',''))}</code></td></tr>
+                    <tr><th>Evidence</th><td colspan="3"><code>{_esc(f.get('evidence',''))}</code></td></tr>
+                </table>
+                <div class="desc"><strong>Description:</strong><br>{_esc(f.get('description',''))}</div>
+                <div class="fix"><strong>✓ Remediation:</strong><br>{_esc(f.get('remediation',''))}</div>
+                {"<div class='refs'><strong>References:</strong><br>" + refs + "</div>" if refs else ""}
+            </div>"""
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VulnScan Report — {_esc(self.scan['url'])}</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#0d1117;color:#e6edf3;line-height:1.6}}
+  a{{color:#58a6ff}}
+  .wrap{{max-width:1100px;margin:0 auto;padding:40px 24px}}
+  header{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;margin-bottom:32px}}
+  header h1{{font-size:26px;color:#58a6ff;margin-bottom:8px}}
+  .meta{{color:#8b949e;font-size:13px;display:flex;gap:24px;flex-wrap:wrap;margin-top:12px}}
+  .meta span strong{{color:#e6edf3}}
+  .summary{{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:32px}}
+  .stat{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;text-align:center}}
+  .stat-num{{font-size:32px;font-weight:700;line-height:1}}
+  .stat-label{{font-size:11px;color:#8b949e;font-weight:600;letter-spacing:1px;margin-top:4px}}
+  h2{{font-size:18px;margin-bottom:16px;color:#e6edf3;border-bottom:1px solid #30363d;padding-bottom:8px}}
+  .finding{{border-radius:10px;padding:20px;margin-bottom:16px}}
+  .finding-header{{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}}
+  .finding-header strong{{font-size:15px;flex:1}}
+  .badge{{font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;color:#fff;letter-spacing:.5px}}
+  .cvss-score{{font-weight:700;font-size:14px;font-family:monospace}}
+  .detail-table{{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px}}
+  .detail-table th{{background:rgba(255,255,255,.04);padding:7px 10px;text-align:left;
+                    color:#8b949e;font-weight:600;width:120px;white-space:nowrap}}
+  .detail-table td{{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.05)}}
+  code{{font-family:monospace;font-size:12px;word-break:break-all}}
+  .desc{{font-size:13px;color:#c9d1d9;margin-bottom:10px}}
+  .fix{{font-size:13px;background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.2);
+        border-radius:6px;padding:10px 14px;margin-bottom:10px}}
+  .refs{{font-size:12px;color:#8b949e}}
+  .refs a{{color:#58a6ff;word-break:break-all}}
+  footer{{text-align:center;color:#8b949e;font-size:12px;margin-top:48px;padding-top:16px;
+          border-top:1px solid #30363d}}
+  @media(max-width:600px){{.summary{{grid-template-columns:repeat(2,1fr)}}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🛡 VulnScan Security Report</h1>
+    <div class="meta">
+      <span><strong>Target:</strong> {_esc(self.scan['url'])}</span>
+      <span><strong>Scan Date:</strong> {scan_date}</span>
+      {"<span><strong>Duration:</strong> " + duration + "</span>" if duration else ""}
+      <span><strong>Total Findings:</strong> {len(self.findings)}</span>
+      <span><strong>Scan ID:</strong> {self.scan['id'][:8]}</span>
+    </div>
+  </header>
+
+  <h2>Executive Summary</h2>
+  <div class="summary">{summary_cards}</div>
+
+  <h2>Detailed Findings</h2>
+  {finding_rows if finding_rows else '<p style="color:#8b949e">No vulnerabilities found.</p>'}
+
+  <footer>Generated by VulnScan · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC ·
+  <em>Use only on systems you own or have written permission to test.</em></footer>
+</div>
+</body>
+</html>"""
+
+
+def _esc(s: str) -> str:
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
