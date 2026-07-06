@@ -101,3 +101,9 @@ This project demonstrates practical implementation of:
 ## ⚠️ Disclaimer
 
 This software is developed solely for educational purposes and authorized penetration testing. The developer is not responsible for any misuse of this tool. Always ensure you have explicit permission before scanning or testing any web application
+
+## Usage
+
+```bash
+python3 main.py
+```
