@@ -2,17 +2,17 @@
 
 A Python-based Web Application Vulnerability Scanner that performs automated security assessments on web applications. The scanner crawls target websites, analyzes forms and URLs, checks for common web security issues, and generates detailed vulnerability reports through an easy-to-use Flask web interface.
 
----
-
-## 🌐 Live Demo
+## 🚀 Live Demo
 
 🔗 **Try the Web Application Vulnerability Scanner here:**
 
-👉 **https://vuln-scanner-olnk.arcada.app**
+👉 [**Launch SENTINEL X – Vulnerability Scanner**](https://koreaishwarya.github.io/Cyber-security-project-2/)
 
-> Enter a target URL to perform an authorized security assessment and view the generated vulnerability report through the web interface.
+> Access the SENTINEL X security dashboard to explore vulnerability scanning, security findings, OWASP Top 10 coverage, and reports.
 
----
+
+
+
 
 ## 🌐 Features
 
